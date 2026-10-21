@@ -23,9 +23,20 @@ export interface ResearchReportResponse {
   approved: boolean;
 }
 
-const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-).replace(/\/+$/, "");
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
+
+function normalizeBaseUrl(value: string | undefined): string {
+  const baseUrl = value?.trim() || DEFAULT_API_BASE_URL;
+  return baseUrl.replace(/\/+$/, "");
+}
+
+const API_BASE_URL = normalizeBaseUrl(
+  process.env.NEXT_PUBLIC_API_URL,
+);
+
+function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 export class ApiError extends Error {
   status: number | null;
@@ -35,6 +46,18 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+function statusMessage(status: number): string {
+  if (status === 429) {
+    return "The AI provider quota has been exceeded. Please try again after the quota resets.";
+  }
+
+  if (status === 502 || status === 503) {
+    return "The research service or an upstream provider is temporarily unavailable. Please try again later.";
+  }
+
+  return `The API returned an error (status ${status}).`;
 }
 
 function extractDetail(body: unknown): string | null {
@@ -79,7 +102,7 @@ async function request<T>(
   let response: Response;
 
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(apiUrl(path), {
       ...init,
       headers: {
         "Content-Type": "application/json",
@@ -106,8 +129,7 @@ async function request<T>(
 
   if (!response.ok) {
     throw new ApiError(
-      extractDetail(data) ??
-        `The API returned an error (status ${response.status}).`,
+      extractDetail(data) ?? statusMessage(response.status),
       response.status,
     );
   }

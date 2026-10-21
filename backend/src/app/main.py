@@ -5,8 +5,22 @@ import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from groq import (
+    APIConnectionError as GroqAPIConnectionError,
+    APIStatusError as GroqAPIStatusError,
+    RateLimitError as GroqRateLimitError,
+)
 from langgraph.types import Command
 from pydantic import BaseModel, Field, model_validator
+from requests import RequestException as UpstreamRequestError
+from tavily.errors import (
+    BadRequestError as TavilyBadRequestError,
+    ForbiddenError as TavilyForbiddenError,
+    InvalidAPIKeyError as TavilyInvalidAPIKeyError,
+    MissingAPIKeyError as TavilyMissingAPIKeyError,
+    TimeoutError as TavilyTimeoutError,
+    UsageLimitExceededError as TavilyUsageLimitExceededError,
+)
 
 from app.graph import report_graph, close_database
 
@@ -249,6 +263,81 @@ def get_research_report(thread_id: str):
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def register_provider_error_handler(
+    exception_type: type[Exception],
+    status_code: int,
+    detail: str,
+) -> None:
+    async def handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        logger.warning(
+            "Upstream provider error on %s %s (%s)",
+            request.method,
+            request.url.path,
+            exception_type.__name__,
+        )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": detail},
+        )
+
+    app.add_exception_handler(exception_type, handler)
+
+
+register_provider_error_handler(
+    GroqRateLimitError,
+    429,
+    "The AI provider quota has been exceeded. "
+    "Please try again after the quota resets.",
+)
+register_provider_error_handler(
+    TavilyUsageLimitExceededError,
+    429,
+    "The search provider quota has been exceeded. "
+    "Please try again after the quota resets.",
+)
+register_provider_error_handler(
+    GroqAPIConnectionError,
+    502,
+    "The AI provider could not be reached. "
+    "Please try again later.",
+)
+register_provider_error_handler(
+    GroqAPIStatusError,
+    502,
+    "The AI provider returned an error. "
+    "Please try again later.",
+)
+register_provider_error_handler(
+    TavilyTimeoutError,
+    503,
+    "The search provider timed out. "
+    "Please try again later.",
+)
+register_provider_error_handler(
+    UpstreamRequestError,
+    502,
+    "An upstream service could not be reached. "
+    "Please try again later.",
+)
+
+for tavily_error in (
+    TavilyBadRequestError,
+    TavilyForbiddenError,
+    TavilyInvalidAPIKeyError,
+    TavilyMissingAPIKeyError,
+):
+    register_provider_error_handler(
+        tavily_error,
+        502,
+        "The search provider is currently unavailable. "
+        "Please try again later.",
+    )
 
 
 @app.exception_handler(Exception)
