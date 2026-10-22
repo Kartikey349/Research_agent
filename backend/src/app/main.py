@@ -159,6 +159,8 @@ def start_research(request: ResearchRequest):
                 "message",
                 "Report is waiting for human review.",
             ),
+            "approved": False,
+            "revision_count": result.get("revision_count", 0),
         }
 
     return {
@@ -171,6 +173,7 @@ def start_research(request: ResearchRequest):
         ),
         "report": result.get("report", ""),
         "approved": result.get("approved", False),
+        "revision_count": result.get("revision_count", 0),
     }
 
 
@@ -202,6 +205,8 @@ def review_research(request: ReviewRequest):
                 "message",
                 "The revised report is waiting for review.",
             ),
+            "approved": False,
+            "revision_count": result.get("revision_count", 0),
         }
 
     return {
@@ -214,6 +219,7 @@ def review_research(request: ReviewRequest):
         ),
         "report": result.get("report", ""),
         "approved": result.get("approved", False),
+        "revision_count": result.get("revision_count", 0),
     }
 
 

@@ -5,6 +5,7 @@ export interface ResearchResponse {
   report: string;
   message?: string;
   approved?: boolean;
+  revision_count?: number;
 }
 
 export interface ResearchStatusResponse {

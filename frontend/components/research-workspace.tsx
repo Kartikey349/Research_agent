@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import ReportMarkdown from "@/components/report-markdown";
 import {
@@ -64,7 +64,7 @@ function mapResponse(
     status: response.status,
     report: response.report ?? "",
     approved: Boolean(response.approved),
-    revisionCount,
+    revisionCount: response.revision_count ?? revisionCount,
     message: response.message,
   };
 }
@@ -84,6 +84,17 @@ function mergeStatus(
   current: ResearchView,
   response: ResearchStatusResponse,
 ): ResearchView {
+  // A status request that started before a review can resolve after the
+  // review response. Never let that older snapshot replace the newer
+  // revised report.
+  const isOlderRevision =
+    current.revisionCount !== null &&
+    response.revision_count < current.revisionCount;
+
+  if (isOlderRevision) {
+    return current;
+  }
+
   return {
     ...current,
     topic: response.topic || current.topic,
@@ -148,19 +159,50 @@ export default function ResearchWorkspace() {
   const isAwaitingReview =
     research?.status === "awaiting_review";
 
-  async function syncStatus(threadId: string) {
-    try {
-      const status = await getResearchStatus(threadId);
-      setResearch((current) =>
-        current
-          ? mergeStatus(current, status)
-          : mapStatus(status),
-      );
-    } catch {
-      // The primary request succeeded, so keep its response if
-      // this optional status refresh fails.
+  const activeThreadId = research?.threadId ?? null;
+  const activeStatus = research?.status ?? null;
+  const pollInFlight = useRef(false);
+
+  useEffect(() => {
+    if (!activeThreadId || activeStatus !== "in_progress") {
+      return;
     }
-  }
+
+    const threadId = activeThreadId;
+    let cancelled = false;
+
+    async function poll() {
+      if (pollInFlight.current) {
+        return;
+      }
+
+      pollInFlight.current = true;
+
+      try {
+        const status = await getResearchStatus(threadId);
+
+        if (cancelled) {
+          return;
+        }
+
+        setResearch((current) =>
+          current ? mergeStatus(current, status) : mapStatus(status),
+        );
+      } catch {
+        // Keep the last known state. A later poll or manual
+        // refresh can recover without clobbering the report.
+      } finally {
+        pollInFlight.current = false;
+      }
+    }
+
+    const interval = window.setInterval(poll, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeThreadId, activeStatus]);
 
   async function handleStart(
     event: FormEvent<HTMLFormElement>,
@@ -193,7 +235,6 @@ export default function ResearchWorkspace() {
       const response = await startResearch(trimmedTopic);
       setResearch(mapResponse(response, 0));
       setLookupId(response.thread_id);
-      await syncStatus(response.thread_id);
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
@@ -260,7 +301,9 @@ export default function ResearchWorkspace() {
       return;
     }
 
-    if (!approved && !feedback.trim()) {
+    const submittedFeedback = approved ? "" : feedback.trim();
+
+    if (!approved && !submittedFeedback) {
       setFeedbackError(
         "Describe the changes you want before requesting a revision.",
       );
@@ -275,14 +318,16 @@ export default function ResearchWorkspace() {
       const response = await submitReview(
         research.threadId,
         approved,
-        approved ? "" : feedback.trim(),
+        submittedFeedback,
       );
 
+      // The synchronous review response is the source of truth:
+      // it carries the revised report, status, and revision count.
       setResearch(mapResponse(response, null));
       setFeedback("");
       setShowFeedback(false);
-      await syncStatus(research.threadId);
     } catch (requestError) {
+      // Keep the feedback so the user can retry without retyping.
       setError(getErrorMessage(requestError));
     } finally {
       setBusy(null);
@@ -638,7 +683,7 @@ export default function ResearchWorkspace() {
                   {busy === "reviewing" ? (
                     <>
                       <Spinner />
-                      Submitting...
+                      Revising report...
                     </>
                   ) : (
                     "Submit Revision Request"
